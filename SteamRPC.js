@@ -9,9 +9,9 @@ const fs = require('fs');
 
 // ==================== Configuration Settings =====================
 // Steam user identification
-const steamUsername = "";
-const steamPassword = "";
-const steam2FASecret = "";
+const config = require("./config/config.json");
+const authentication = config.authentication;
+
 
 // Configuration Settings
 var pollRate = 15*1000; // Poll Steam Rich Presence every n seconds. You could set it lower, but Discord RPC gets updated every 15 sec.
@@ -78,51 +78,48 @@ discordRPCClient.on("ready", () => {
 richPresenceObjects = {};
 
 function loadProfiles() {
-    profileFiles = fs.readdirSync("profiles");
-    for (i=0; i<profileFiles.length; i++) {
-        try {
-            // Try to create the method and listeners from the profiles.
-            // Use the AppID name as it's easily retrievable in the callback function in the listener.
-            richPresenceObject = richPresenceObjects[require("./profiles/" + profileFiles[i]).appID] = {};
-            richPresenceObject.steamRPC = new Steam.SteamRichPresence(steamClient, require("./profiles/" + profileFiles[i]).appID);
-            richPresenceObject.method = require("./profiles/"+profileFiles[i]).translateSteamPresence;
-            richPresenceObject.title = require("./profiles/"+profileFiles[i]).title;
-        }
-        catch(err) {
-            console.log(`An error occured while loading ${profileFiles[i]}. Check if you've supplied appID and title or if there's an error. Skipping profile...`);
-            console.error(err);
-            continue;
-        }
-        richPresenceObjects[require("./profiles/" + profileFiles[i]).appID].steamRPC.on("info", function (data) {
-            if (data.rich_presence[0].rich_presence_kv.byteLength > 0) {
-                currentPresenceGame = `${richPresenceObjects[this._appid].title}`;
-                steamRichPresence = VDF.decode(ByteBuffer.wrap(data.rich_presence[0].rich_presence_kv)).RP;
-                try {
-                    discordRichPresence = richPresenceObjects[this._appid].method(steamRichPresence);
-                    if (typeof discordRichPresence !== "object") throw `Profile returned '${typeof discordRichPresence} instead of an object.'`;
-                }
-                catch(codeErr) {
-                    console.log(`A code error has occured in the game profile for '${richPresenceObjects[this._appid].title}':`);
-                    console.error(codeErr);
-                    return;
-                }
-                discordRPCClient.setActivity(discordRichPresence);
-                debugLine = "Received: "+JSON.stringify(steamRichPresence);
-                printInfo();
-            }
+    let profileFiles = fs.readdirSync("profiles"); // An array of the files within the 'profiles' folder.
+
+    profileFiles.forEach((profile) => {
+        let gameProfile = require(`./profiles/${profile}`);
+        let richPresenceObject = richPresenceObjects[gameProfile.appID] = {};
+
+        // Try to create the method and listeners from the profiles.
+        // Use the AppID name as it's easily retrievable in the callback function in the listener.
+        richPresenceObject.steamRPC = new Steam.SteamRichPresence(steamClient, gameProfile.appID);
+        richPresenceObject.method = gameProfile.translateSteamPresence;
+        richPresenceObject.title = gameProfile.title;
+
+        richPresenceObject.steamRPC.on("info", (data) => {
+            if (data.rich_presence[0].rich_presence_kv.byteLength <= 0)
+                return;
+
+            let currentPresenceGame = `${richPresenceObjects[this._appid].title}`;
+            let steamRichPresence = VDF.decode(ByteBuffer.wrap(data.rich_presence[0].rich_presence_kv)).RP;
+
+            let discordRichPresence = richPresenceObjects[this._appid].method(steamRichPresence);
+
+            if (typeof discordRichPresence !== "object")
+                throw `Profile returned '${typeof discordRichPresence} instead of an object.'`;
+
+            discordRPCClient.setActivity(discordRichPresence);
+            debugLine = "Received: " + JSON.stringify(steamRichPresence);
+            printInfo();
         });
-        debugLine = `[${i+1}/${profileFiles.length}] Loading '${profileFiles[i]}'...`;
-        printInfo();
-    }
+
+        debugLine = `Loading profile: ${gameProfile.title}`;
+    });
+
     setInterval(pollSteamPresence, pollRate);
     pollSteamPresence();
 }
 
 function pollSteamPresence() {
     // TODO: Limit Steam requests when there's more profiles.
-    for (game in richPresenceObjects) {
+    richPresenceObjects.forEach((data) => {
         richPresenceObjects[game].steamRPC.request(steamClient.steamID.toString());
-    }
+    });
+
     debugLine = `Finished loading ${Object.keys(richPresenceObjects).length} profile(s), listening for Steam RPC events...`;
     printInfo();
 }
